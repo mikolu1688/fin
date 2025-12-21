@@ -112,3 +112,36 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 5000);
     }
 });
+const form = document.getElementById("contact-form");
+const statusMessage = document.getElementById("form-status");
+
+form.addEventListener("submit", function (e) {
+    e.preventDefault(); // 防止表單真的送出
+
+    const name = document.getElementById("name").value;
+    const email = document.getElementById("email").value;
+    const message = document.getElementById("message").value;
+
+    fetch("https://jsonplaceholder.typicode.com/posts", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            name: name,
+            email: email,
+            message: message
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        statusMessage.textContent = "✅ 訊息已成功送出！";
+        statusMessage.style.color = "green";
+        form.reset();
+    })
+    .catch(error => {
+        statusMessage.textContent = "❌ 發送失敗，請稍後再試";
+        statusMessage.style.color = "red";
+    });
+});
+
