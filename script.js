@@ -19,7 +19,7 @@ btnDevice.onclick = async () => {
         video.srcObject = stream;
         deviceStatus.textContent = "✅ 相機與麥克風已啟用";
 
-        // 同時用 Fetch API 傳送裝置啟用狀態（通訊示範）
+        // 使用 Fetch API 傳送裝置啟用狀態（通訊示範）
         fetch("https://jsonplaceholder.typicode.com/posts", {
             method: "POST",
             headers: {
@@ -43,6 +43,25 @@ btnDevice.onclick = async () => {
         alert("無法取得相機或麥克風權限");
     }
 };
+
+/* ========= 僅限行動裝置使用的元素 ========= */
+const mobileMessage = document.getElementById("mobile-message");
+const mobileBtn = document.getElementById("mobile-btn");
+
+// 偵測是否為行動裝置
+const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+if (isMobile) {
+    mobileMessage.textContent = "歡迎使用行動裝置！您可以使用專屬互動功能";
+    mobileBtn.style.display = "inline-block";
+
+    mobileBtn.addEventListener("click", () => {
+        alert("你正在使用行動裝置，專屬功能已啟動 🎉");
+    });
+} else {
+    mobileMessage.textContent = "⚠️ 此功能僅限行動裝置使用";
+    mobileBtn.style.display = "none";
+}
 
 /* ========= 通訊要素：表單 + Fetch API ========= */
 const form = document.getElementById("contact-form");
