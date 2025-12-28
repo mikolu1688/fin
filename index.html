@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>附近 YouBike 清單</title>
+<title>附近 YouBike 清單 </title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -15,7 +15,6 @@ html, body {
   font-family: Arial, sans-serif;
 }
 
-/* 版面配置 */
 .container {
   display: flex;
   height: 100%;
@@ -29,18 +28,16 @@ html, body {
   flex: 1;
   padding: 10px;
   overflow-y: auto;
-  background: #f8f8f8;
+  background: #f4f4f4;
 }
 
-/* 表格樣式 */
 table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
 }
 
 th, td {
-  padding: 8px;
+  padding: 6px;
   border-bottom: 1px solid #ccc;
   text-align: center;
 }
@@ -55,7 +52,7 @@ th {
 <div class="container">
   <div id="map"></div>
   <div id="list">
-    <h3>🚲 附近 YouBike（500 公尺內）</h3>
+    <h3>🚲 附近 YouBike（最多顯示 5 站）</h3>
     <table>
       <thead>
         <tr>
@@ -71,29 +68,26 @@ th {
 </div>
 
 <script>
-/* ===== 距離計算 ===== */
+/* 距離計算 */
 function getDistance(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
-
   const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) *
-    Math.cos(lat2 * Math.PI / 180) *
-    Math.sin(dLon / 2) ** 2;
-
+    Math.sin(dLat/2)**2 +
+    Math.cos(lat1*Math.PI/180) *
+    Math.cos(lat2*Math.PI/180) *
+    Math.sin(dLon/2)**2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-/* ===== 地圖 ===== */
-const map = L.map('map').setView([25.0330, 121.5654], 15);
-
+/* 地圖 */
+const map = L.map('map').setView([25.0330, 121.5654], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap'
 }).addTo(map);
 
-/* ===== 行動：定位 ===== */
+/* 定位 */
 navigator.geolocation.getCurrentPosition(pos => {
   const userLat = pos.coords.latitude;
   const userLng = pos.coords.longitude;
@@ -103,50 +97,47 @@ navigator.geolocation.getCurrentPosition(pos => {
     .bindPopup("📍 你的位置")
     .openPopup();
 
-  map.setView([userLat, userLng], 16);
+  map.setView([userLat, userLng], 14);
 
-  /* ===== 通訊：YouBike API ===== */
   fetch("https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate.json")
     .then(res => res.json())
     .then(data => {
 
+      // 計算距離並排序
+      const nearby = data.map(station => ({
+        ...station,
+        distance: getDistance(userLat, userLng, station.lat, station.lng)
+      }))
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, 5); // 👉 一定顯示最近 5 站
+
       const tbody = document.getElementById("bikeList");
-      tbody.innerHTML = "";
 
-      data.forEach(station => {
-        const distance = getDistance(
-          userLat,
-          userLng,
-          station.lat,
-          station.lng
-        );
+      nearby.forEach(station => {
 
-        // 只顯示 500 公尺內
-        if (distance <= 500) {
+        // 地圖
+        L.marker([station.lat, station.lng])
+          .addTo(map)
+          .bindPopup(`
+            <b>${station.sna}</b><br>
+            距離 ${station.distance.toFixed(0)} 公尺
+          `);
 
-          /* 地圖標記 */
-          L.marker([station.lat, station.lng])
-            .addTo(map)
-            .bindPopup(`
-              <b>${station.sna}</b><br>
-              距離 ${distance.toFixed(0)} 公尺
-            `);
-
-          /* 表單列表 */
-          const tr = document.createElement("tr");
-          tr.innerHTML = `
-            <td>${station.sna}</td>
-            <td>${distance.toFixed(0)}</td>
-            <td>${station.sbi}</td>
-            <td>${station.bemp}</td>
-          `;
-          tbody.appendChild(tr);
-        }
+        // 表單
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${station.sna}</td>
+          <td>${station.distance.toFixed(0)}</td>
+          <td>${station.sbi}</td>
+          <td>${station.bemp}</td>
+        `;
+        tbody.appendChild(tr);
       });
+
     });
 
 }, () => {
-  alert("請允許定位，才能顯示附近 YouBike");
+  alert("請允許定位權限");
 });
 </script>
 </body>
