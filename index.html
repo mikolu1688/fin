@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YouBike 2.0 找車地圖</title>
+    <title>YouBike 2.0 即時車位查詢</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
@@ -14,10 +14,10 @@
         table { width: 100%; border-collapse: collapse; }
         th { background: #ffef00; color: #333; position: sticky; top: 0; padding: 12px; z-index: 10; border-bottom: 1px solid #ddd; }
         td { padding: 12px 8px; border-bottom: 1px solid #eee; text-align: center; }
-        .available { color: #2e7d32; font-weight: bold; }
-        .empty { color: #d32f2f; font-weight: bold; }
+        .available { color: #2e7d32; font-weight: bold; } /* 有車顯示綠色 */
+        .empty { color: #d32f2f; font-weight: bold; }    /* 沒車顯示紅色 */
 
-        /* 初始詢問層 */
+        /* 啟動詢問層 */
         #overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: #fff; display: flex; flex-direction: column; 
@@ -33,10 +33,10 @@
 <body>
 
 <div id="overlay">
-    <div style="font-size: 50px; margin-bottom: 10px;">🚲</div>
-    <h2>YouBike 2.0 即時查詢</h2>
-    <p>我們需要您的定位來尋找附近的站點</p>
-    <button class="start-btn" onclick="startApp()">同意並開啟定位</button>
+    <div style="font-size: 60px; margin-bottom: 10px;">🚲</div>
+    <h2>YouBike 即時車位查詢</h2>
+    <p>點擊按鈕授權定位，尋找附近的 YouBike 2.0 站點</p>
+    <button class="start-btn" onclick="startApp()">開啟定位服務</button>
 </div>
 
 <div class="container">
@@ -57,17 +57,18 @@
 </div>
 
 <script>
-// 初始化地圖
+// 初始化地圖中心點 (預設台北市)
 const map = L.map('map').setView([25.0330, 121.5654], 15);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
 let userMarker;
 
+// 1. 啟動流程：詢問定位權限
 function startApp() {
     document.getElementById('overlay').style.display = 'none';
     
     if (!navigator.geolocation) {
-        alert("瀏覽器不支援定位功能");
+        alert("您的瀏覽器不支援定位功能。");
         return;
     }
 
@@ -76,49 +77,50 @@ function startApp() {
         
         // 標記使用者位置
         if (userMarker) map.removeLayer(userMarker);
-        userMarker = L.marker([lat, lng]).addTo(map).bindPopup("<b>📍 您在此處</b>").openPopup();
+        userMarker = L.marker([lat, lng]).addTo(map).bindPopup("<b>📍 您在這裡</b>").openPopup();
         map.setView([lat, lng], 16);
 
-        await fetchBikeData(lat, lng);
+        await getLiveBikeData(lat, lng);
     }, (err) => {
-        alert("定位失敗，原因：" + err.message + "\n請確保已開啟 GPS 權限並使用 HTTPS 網址訪問。");
+        alert("定位失敗，請確保已在設定中開啟 GPS 權限。");
         document.getElementById('overlay').style.display = 'flex';
     });
 }
 
-async function fetchBikeData(uLat, uLng) {
+// 2. 抓取即時資料並渲染
+async function getLiveBikeData(uLat, uLng) {
     const tbody = document.getElementById('bikeList');
-    tbody.innerHTML = '<tr><td colspan="4">正在取得即時車位資料...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4">即時資料載入中...</td></tr>';
 
     try {
-        // 使用更穩定的 corsproxy.io 代理
-        const targetUrl = "https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate.json";
-        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+        // 使用 corsproxy.io 穩定跳過 CORS 限制
+        const apiTarget = "https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate.json";
+        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(apiTarget)}`;
 
         const response = await fetch(proxyUrl);
-        if (!response.ok) throw new Error("代理伺服器連線失敗");
+        if (!response.ok) throw new Error("API 連線異常");
         
         const data = await response.json();
 
-        // 整理資料與距離排序
+        // 整理資料：計算距離並依近到遠排序
         const stations = data.map(s => ({
-            name: s.sna.replace("YouBike2.0_", ""),
+            name: s.sna.replace("YouBike2.0_", ""), // 移除冗餘字眼
             lat: s.lat,
             lng: s.lng,
-            available: s.sbi,
-            empty: s.bemp,
-            distance: getDistance(uLat, uLng, s.lat, s.lng)
+            available: s.sbi, // 目前可借車輛
+            empty: s.bemp,    // 目前可還空位
+            distance: calcDist(uLat, uLng, s.lat, s.lng)
         }))
         .sort((a, b) => a.distance - b.distance)
-        .slice(0, 20); // 取最近 20 站
+        .slice(0, 20); // 只顯示最近的 20 個站點
 
         tbody.innerHTML = "";
         stations.forEach(s => {
-            // 在地圖上標記站點
+            // 在地圖上標記 YouBike 站點
             L.marker([s.lat, s.lng]).addTo(map)
-                .bindPopup(`<b>${s.name}</b><br>可借車輛：${s.available}<br>可還空位：${s.empty}`);
+                .bindPopup(`<b>${s.name}</b><br>🚲 可借：${s.available}<br>🅿️ 可還：${s.empty}`);
 
-            // 填充下方列表
+            // 填充資料列表
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td style="text-align:left">${s.name}</td>
@@ -130,13 +132,13 @@ async function fetchBikeData(uLat, uLng) {
         });
 
     } catch (err) {
-        console.error(err);
-        tbody.innerHTML = '<tr><td colspan="4" style="color:red">API 讀取失敗，請重新整理網頁。</td></tr>';
+        console.error("錯誤詳情:", err);
+        tbody.innerHTML = '<tr><td colspan="4" style="color:red">無法取得即時資料，請檢查網路連線。</td></tr>';
     }
 }
 
-// 距離計算公式
-function getDistance(lat1, lon1, lat2, lon2) {
+// 距離計算 (Haversine Formula)
+function calcDist(lat1, lon1, lat2, lon2) {
     const R = 6371000;
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
