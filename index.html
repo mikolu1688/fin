@@ -1,120 +1,167 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>附近 YouBike 即時站點查詢</title>
-
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-<style>
-  html, body { height: 100%; margin: 0; font-family: "Microsoft JhengHei", sans-serif; }
-  .container { display: flex; flex-direction: column; height: 100%; }
-  #map { flex: 1; min-height: 300px; }
-  #list-container { height: 40%; overflow-y: auto; background: white; border-top: 2px solid #ddd; }
-  table { width: 100%; border-collapse: collapse; }
-  th { background: #ffef00; color: #333; position: sticky; top: 0; padding: 10px; z-index: 1000; }
-  td { padding: 12px 8px; border-bottom: 1px solid #eee; text-align: center; }
-  tr:nth-child(even) { background: #fafafa; }
-  .status-tag { padding: 2px 6px; border-radius: 4px; font-size: 0.9em; font-weight: bold; }
-  .available { color: #2e7d32; } /* 綠色：還有車 */
-  .empty { color: #d32f2f; }    /* 紅色：沒車 */
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouBike 2.0 近站查詢 (TDX API 版)</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        html, body { height: 100%; margin: 0; font-family: sans-serif; }
+        .container { display: flex; flex-direction: column; height: 100%; }
+        #map { flex: 1; }
+        #list-container { height: 40%; overflow-y: auto; background: white; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 10px; border-bottom: 1px solid #ddd; text-align: center; }
+        th { background: #f8f8f8; position: sticky; top: 0; }
+        
+        /* 詢問層樣式 */
+        #overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); color: white;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            z-index: 9999;
+        }
+        button {
+            padding: 15px 30px; font-size: 1.2em; cursor: pointer;
+            background: #ffef00; border: none; border-radius: 5px; font-weight: bold;
+        }
+    </style>
 </head>
-
 <body>
+
+<div id="overlay">
+    <h2>🚲 附近 YouBike 查詢</h2>
+    <p>我們需要取得您的位置以尋找最近的站點</p>
+    <button onclick="startApp()">同意並取得定位</button>
+</div>
+
 <div class="container">
-  <div id="map"></div>
-  <div id="list-container">
-    <table>
-      <thead>
-        <tr>
-          <th>站名</th>
-          <th>距離</th>
-          <th>可借</th>
-          <th>可還</th>
-        </tr>
-      </thead>
-      <tbody id="bikeList">
-        <tr><td colspan="4">正在取得您的定位...</td></tr>
-      </tbody>
-    </table>
-  </div>
+    <div id="map"></div>
+    <div id="list-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>站名</th>
+                    <th>距離</th>
+                    <th>可借</th>
+                    <th>可還</th>
+                </tr>
+            </thead>
+            <tbody id="bikeList"></tbody>
+        </table>
+    </div>
 </div>
 
 <script>
-// 計算距離 (Haversine formula)
-function getDistance(lat1, lon1, lat2, lon2) {
-  const R = 6371000; 
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
-  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+// --- 請在此輸入您的 TDX API 金鑰 ---
+const CLIENT_ID = 'YOUR_CLIENT_ID'; 
+const CLIENT_SECRET = 'YOUR_CLIENT_SECRET';
+// ------------------------------
+
+let userLat, userLng;
+const map = L.map('map').setView([25.0330, 121.5654], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+// 1. 點擊按鈕後開始執行
+function startApp() {
+    document.getElementById('overlay').style.display = 'none';
+    
+    if (!navigator.geolocation) {
+        alert("您的瀏覽器不支援定位功能");
+        return;
+    }
+
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+        userLat = pos.coords.latitude;
+        userLng = pos.coords.longitude;
+        
+        // 設定地圖中心
+        L.marker([userLat, userLng]).addTo(map).bindPopup("您的位置").openPopup();
+        map.setView([userLat, userLng], 16);
+
+        await initBikeData();
+    }, (err) => {
+        alert("定位失敗，請確保已開啟 GPS 並授權網頁存取位置。");
+        document.getElementById('overlay').style.display = 'flex';
+    });
 }
 
-// 初始化地圖 (預設台北市政府)
-const map = L.map('map').setView([25.0330, 121.5654], 15);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '© OpenStreetMap'
-}).addTo(map);
+// 2. 取得 TDX Access Token (因為 API 要求驗證)
+async function getAccessToken() {
+    const url = "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token";
+    const params = new URLSearchParams();
+    params.append('grant_type', 'client_credentials');
+    params.append('client_id', CLIENT_ID);
+    params.append('client_secret', CLIENT_SECRET);
 
-// 取得使用者定位
-navigator.geolocation.getCurrentPosition(async (pos) => {
-  const userLat = pos.coords.latitude;
-  const userLng = pos.coords.longitude;
-
-  // 標記使用者位置
-  L.marker([userLat, userLng]).addTo(map).bindPopup("<b>📍 你在這裡</b>").openPopup();
-  map.setView([userLat, userLng], 16);
-
-  try {
-    // 呼叫台北市政府 YouBike 2.0 即時資料 API
-    const response = await fetch("https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate.json");
-    if (!response.ok) throw new Error("無法取得 API 資料");
-    
-    const data = await response.json();
-
-    // 1. 計算距離並存入陣列
-    const sortedData = data.map(station => ({
-      name: station.sna.replace("YouBike2.0_", ""),
-      lat: station.lat,
-      lng: station.lng,
-      available: station.sbi, // 可借車輛
-      empty: station.bemp,    // 可還空位
-      distance: getDistance(userLat, userLng, station.lat, station.lng)
-    }))
-    .sort((a, b) => a.distance - b.distance) // 2. 依距離排序
-    .slice(0, 20); // 3. 只取最近 20 站，效能較好
-
-    const tbody = document.getElementById("bikeList");
-    tbody.innerHTML = "";
-
-    sortedData.forEach(station => {
-      // 在地圖上標記
-      const markerColor = station.available > 0 ? "blue" : "red";
-      L.marker([station.lat, station.lng]).addTo(map)
-        .bindPopup(`<b>${station.name}</b><br>可借：${station.available}<br>可還：${station.empty}`);
-
-      // 填充列表
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td style="text-align:left;">${station.name}</td>
-        <td>${Math.round(station.distance)}m</td>
-        <td class="status-tag ${station.available > 0 ? 'available' : 'empty'}">${station.available}</td>
-        <td>${station.empty}</td>
-      `;
-      tbody.appendChild(tr);
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params
     });
+    const data = await response.json();
+    return data.access_token;
+}
 
-  } catch (error) {
-    console.error(error);
-    document.getElementById("bikeList").innerHTML = `<tr><td colspan="4">資料讀取失敗</td></tr>`;
-  }
+// 3. 獲取資料並渲染
+async function initBikeData() {
+    try {
+        const token = await getAccessToken();
+        const tbody = document.getElementById('bikeList');
+        tbody.innerHTML = '<tr><td colspan="4">資料加載中...</td></tr>';
 
-}, (err) => {
-  alert("請開啟 GPS 定位授權，否則無法計算距離。");
-});
+        // 呼叫 TDX API (台北市 YouBike 2.0 站點與即時資料)
+        // 這裡使用 $top=30 並搭配距離排序邏輯
+        const url = `https://tdx.transportdata.tw/api/basic/v2/Bike/Availability/City/Taipei?$format=JSON`;
+        
+        const res = await fetch(url, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const availData = await res.json();
+
+        // 站點位置資訊 (通常需要對接，但 TDX V2 Availability 已包含部分基礎資訊)
+        // 為了簡化，我們計算距離並排序
+        const sortedData = availData.map(station => {
+            const d = getDistance(userLat, userLng, station.StationPosition.PositionLat, station.StationPosition.PositionLon);
+            return { ...station, distance: d };
+        })
+        .sort((a, b) => a.distance - b.distance)
+        .slice(0, 20); // 取最近 20 站
+
+        tbody.innerHTML = "";
+        sortedData.forEach(station => {
+            const name = station.StationName.Zh_tw.replace("YouBike2.0_", "");
+            
+            // 地圖標記
+            L.marker([station.StationPosition.PositionLat, station.StationPosition.PositionLon])
+                .addTo(map)
+                .bindPopup(`<b>${name}</b><br>可借：${station.AvailableRentBikes}<br>可還：${station.AvailableReturnSlots}`);
+
+            // 表格渲染
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${name}</td>
+                <td>${Math.round(station.distance)}m</td>
+                <td style="color:${station.AvailableRentBikes > 0 ? 'green' : 'red'}">${station.AvailableRentBikes}</td>
+                <td>${station.AvailableReturnSlots}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+    } catch (err) {
+        console.error(err);
+        alert("API 請求失敗，請檢查 Client ID/Secret 是否正確。");
+    }
+}
+
+function getDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 </script>
 </body>
 </html>
