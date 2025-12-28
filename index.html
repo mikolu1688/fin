@@ -1,71 +1,57 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="zh-Hant">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3311331007 期末專案</title>
-    <link rel="stylesheet" href="style.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>公共自行車位置圖</title>
+
+<!-- Leaflet 地圖套件 -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<style>
+  body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+  }
+  #map {
+    height: 100vh;
+  }
+</style>
 </head>
+
 <body>
+<div id="map"></div>
 
-    <header class="hero-section">
-        <h1>行動與通訊單頁網站</h1>
-        <p>探索我們的互動世界</p>
-    </header>
+<script>
+/* =============================
+   1️⃣ 初始化地圖
+============================= */
+const map = L.map('map').setView([25.0330, 121.5654], 14);
 
-    <!-- 行動要素：捲動效果 -->
-    <section id="movement" class="section">
-        <h2>✨ 行動元素 - 滾動效果</h2>
-        <div id="moving-box" class="box">
-            我會隨著你捲動頁面而移動！
-        </div>
-        <p>請試著上下捲動頁面</p>
-        <p class="placeholder-content">（更多內容佔位）</p>
-        <p class="placeholder-content">（更多內容佔位）</p>
-        <p class="placeholder-content">（更多內容佔位）</p>
-    </section>
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap'
+}).addTo(map);
 
-    <!-- 裝置互動要素：相機與麥克風 -->
-    <section id="device" class="section">
-        <h2>📷 裝置互動 - 相機與麥克風</h2>
-        <button id="btn-device">啟用相機與麥克風</button>
-        <p id="device-status"></p>
-        <br>
-        <video id="video" autoplay playsinline width="320"></video>
-    </section>
+/* =============================
+   2️⃣ 行動要素：取得使用者位置
+============================= */
+if (navigator.geolocation) {
+  navigator.geolocation.getCurrentPosition(position => {
+    const lat = position.coords.latitude;
+    const lng = position.coords.longitude;
 
-    <!-- 行動專用元素 -->
-    <section id="mobile-only" class="section">
-        <h2>📱 行動專用互動</h2>
-        <p id="mobile-message"></p>
-        <button id="mobile-btn" style="display:none;">行動裝置互動按鈕</button>
-    </section>
+    L.marker([lat, lng])
+      .addTo(map)
+      .bindPopup("📍 你目前的位置")
+      .openPopup();
 
-    <!-- 通訊要素：表單 + Fetch API -->
-    <section id="communication" class="section">
-        <h2>💬 通訊元素 - 聯絡我們</h2>
-        <form id="contact-form">
-            <div class="form-group">
-                <label for="name">姓名:</label>
-                <input type="text" id="name" required>
-            </div>
-            <div class="form-group">
-                <label for="email">Email:</label>
-                <input type="email" id="email" required>
-            </div>
-            <div class="form-group">
-                <label for="message">訊息:</label>
-                <textarea id="message" rows="5" required></textarea>
-            </div>
-            <button type="submit">發送訊息</button>
-            <p id="form-status" class="status-message"></p>
-        </form>
-    </section>
+    map.setView([lat, lng], 15);
+  });
+}
 
-    <footer>
-        <p>&copy; 2025 互動式網站範例</p>
-    </footer>
-
-    <script src="script.js"></script>
-</body>
-</html>
+/* =============================
+   3️⃣ 通訊要素：取得公共自行車資料
+   （示範：台北 YouBike API）
+============================= */
+fetch("https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate_
