@@ -5,18 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>公共自行車位置圖</title>
 
-<!-- Leaflet 地圖套件 -->
-<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
 <style>
-  body {
-    margin: 0;
-    font-family: Arial, sans-serif;
-  }
-  #map {
-    height: 100vh;
-  }
+html, body {
+  height: 100%;
+  margin: 0;
+}
+#map {
+  height: 100%;
+}
 </style>
 </head>
 
@@ -24,34 +23,47 @@
 <div id="map"></div>
 
 <script>
-/* =============================
-   1️⃣ 初始化地圖
-============================= */
+/* 1️⃣ 一定會顯示的地圖 */
 const map = L.map('map').setView([25.0330, 121.5654], 14);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap'
 }).addTo(map);
 
-/* =============================
-   2️⃣ 行動要素：取得使用者位置
-============================= */
+/* 2️⃣ 行動要素：定位（有失敗處理） */
 if (navigator.geolocation) {
-  navigator.geolocation.getCurrentPosition(position => {
-    const lat = position.coords.latitude;
-    const lng = position.coords.longitude;
-
-    L.marker([lat, lng])
-      .addTo(map)
-      .bindPopup("📍 你目前的位置")
-      .openPopup();
-
-    map.setView([lat, lng], 15);
-  });
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      const { latitude, longitude } = pos.coords;
+      L.marker([latitude, longitude])
+        .addTo(map)
+        .bindPopup("📍 你的位置")
+        .openPopup();
+      map.setView([latitude, longitude], 15);
+    },
+    () => {
+      alert("定位失敗，已使用預設位置");
+    }
+  );
 }
 
-/* =============================
-   3️⃣ 通訊要素：取得公共自行車資料
-   （示範：台北 YouBike API）
-============================= */
-fetch("https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate_
+/* 3️⃣ 通訊要素：公共自行車資料 */
+fetch("https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate.json")
+  .then(res => res.json())
+  .then(data => {
+    data.slice(0, 50).forEach(station => {
+      L.marker([station.lat, station.lng])
+        .addTo(map)
+        .bindPopup(`
+          <b>${station.sna}</b><br>
+          可借：${station.sbi}<br>
+          可還：${station.bemp}
+        `);
+    });
+  })
+  .catch(err => {
+    console.log("API 失敗", err);
+  });
+</script>
+</body>
+</html>
