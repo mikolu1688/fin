@@ -7,35 +7,34 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
-        html, body { height: 100%; margin: 0; font-family: "Microsoft JhengHei", sans-serif; }
+        html, body { height: 100%; margin: 0; font-family: sans-serif; }
         .container { display: flex; flex-direction: column; height: 100%; }
         #map { flex: 1; z-index: 1; }
         #list-container { height: 40%; overflow-y: auto; background: white; border-top: 3px solid #ffef00; }
         table { width: 100%; border-collapse: collapse; }
-        th { background: #ffef00; color: #333; position: sticky; top: 0; padding: 12px; z-index: 10; }
-        td { padding: 12px 8px; border-bottom: 1px solid #eee; text-align: center; }
-        .available { color: #2e7d32; font-weight: bold; }
-        .empty { color: #d32f2f; font-weight: bold; }
-
-        /* 初始詢問層 */
+        th { background: #ffef00; position: sticky; top: 0; padding: 10px; z-index: 10; }
+        td { padding: 10px; border-bottom: 1px solid #eee; text-align: center; }
+        .available { color: green; font-weight: bold; }
+        .empty { color: red; font-weight: bold; }
+        
+        /* 詢問層 */
         #overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: #fff; display: flex; flex-direction: column; 
+            background: white; display: flex; flex-direction: column; 
             justify-content: center; align-items: center; z-index: 9999;
         }
         .start-btn {
             padding: 15px 40px; font-size: 1.2rem; cursor: pointer;
-            background: #ffef00; border: 2px solid #000; border-radius: 50px; font-weight: bold;
+            background: #ffef00; border: 2px solid #000; border-radius: 50px;
         }
     </style>
 </head>
 <body>
 
 <div id="overlay">
-    <div style="font-size: 40px; margin-bottom: 10px;">🚲</div>
-    <h2>即時 YouBike 查詢</h2>
+    <h2>🚲 YouBike 2.0 即時查詢</h2>
     <p>點擊按鈕授權定位，尋找最近站點</p>
-    <button class="start-btn" onclick="startApp()">開始查詢</button>
+    <button class="start-btn" onclick="startApp()">開始定位並查詢</button>
 </div>
 
 <div class="container">
@@ -43,12 +42,7 @@
     <div id="list-container">
         <table>
             <thead>
-                <tr>
-                    <th>站點名稱</th>
-                    <th>距離</th>
-                    <th>可借</th>
-                    <th>可還</th>
-                </tr>
+                <tr><th>站點</th><th>距離</th><th>可借</th><th>可還</th></tr>
             </thead>
             <tbody id="bikeList"></tbody>
         </table>
@@ -56,67 +50,58 @@
 </div>
 
 <script>
-const map = L.map('map').setView([25.0330, 121.5654], 15);
+const map = L.map('map').setView([25.033, 121.565], 15);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
-
-let userMarker;
 
 function startApp() {
     document.getElementById('overlay').style.display = 'none';
     
-    if (!navigator.geolocation) {
-        alert("瀏覽器不支援定位");
-        return;
-    }
-
     navigator.geolocation.getCurrentPosition(async (pos) => {
         const { latitude: lat, longitude: lng } = pos.coords;
-        
-        if (userMarker) map.removeLayer(userMarker);
-        userMarker = L.marker([lat, lng]).addTo(map).bindPopup("<b>📍 您在此處</b>").openPopup();
+        L.marker([lat, lng]).addTo(map).bindPopup("您在此處").openPopup();
         map.setView([lat, lng], 16);
-
         await fetchBikeData(lat, lng);
-    }, () => {
-        alert("定位取得失敗，請檢查權限設定。");
+    }, (err) => {
+        alert("定位失敗：" + err.message + "\n請確認是否開啟 GPS 並使用 HTTPS 連線。");
     });
 }
 
 async function fetchBikeData(uLat, uLng) {
     const tbody = document.getElementById('bikeList');
-    tbody.innerHTML = '<tr><td colspan="4">資料加載中...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4">正在努力連線中...</td></tr>';
+
+    // 嘗試多種代理方式以確保成功
+    const target = "https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate.json";
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(target)}&timestamp=${new Date().getTime()}`;
 
     try {
-        // 使用 allorigins 代理伺服器解決跨網域 (CORS) 問題
-        const targetUrl = encodeURIComponent("https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate.json");
-        const proxyUrl = `https://api.allorigins.win/get?url=${targetUrl}`;
-
         const response = await fetch(proxyUrl);
-        if (!response.ok) throw new Error();
+        if (!response.ok) throw new Error("代理伺服器回應異常");
         
         const resData = await response.json();
-        const data = JSON.parse(resData.contents); // 代理會包裝在 contents 欄位
+        // 檢查 contents 是否存在
+        if (!resData.contents) throw new Error("找不到資料內容");
+        
+        const data = JSON.parse(resData.contents);
 
         const stations = data.map(s => ({
             name: s.sna.replace("YouBike2.0_", ""),
-            lat: s.lat,
-            lng: s.lng,
-            available: s.sbi,
-            empty: s.bemp,
-            distance: getDistance(uLat, uLng, s.lat, s.lng)
+            lat: s.lat, lng: s.lng,
+            available: s.sbi, empty: s.bemp,
+            dist: getDistance(uLat, uLng, s.lat, s.lng)
         }))
-        .sort((a, b) => a.distance - b.distance)
+        .sort((a, b) => a.dist - b.dist)
         .slice(0, 20);
 
         tbody.innerHTML = "";
         stations.forEach(s => {
             L.marker([s.lat, s.lng]).addTo(map)
-                .bindPopup(`<b>${s.name}</b><br>可借：${s.available}<br>可還：${s.empty}`);
+                .bindPopup(`<b>${s.name}</b><br>可借：${s.available}`);
 
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td style="text-align:left">${s.name}</td>
-                <td>${Math.round(s.distance)}m</td>
+                <td>${Math.round(s.dist)}m</td>
                 <td class="${s.available > 0 ? 'available' : 'empty'}">${s.available}</td>
                 <td>${s.empty}</td>
             `;
@@ -125,7 +110,7 @@ async function fetchBikeData(uLat, uLng) {
 
     } catch (err) {
         console.error(err);
-        tbody.innerHTML = '<tr><td colspan="4" style="color:red">無法連線至 API，請檢查網路或稍後再試。</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="4" style="color:red">連線失敗！原因：${err.message}<br>請重新整理或檢查網路設定。</td></tr>`;
     }
 }
 
