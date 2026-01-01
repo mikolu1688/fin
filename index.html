@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
-        html, body { height: 100%; margin: 0; font-family: sans-serif; }
+        html, body { height: 100%; margin: 0; font-family: "Microsoft JhengHei", sans-serif; }
         .container { display: flex; flex-direction: column; height: 100%; }
         #map { flex: 1; z-index: 1; }
         #list-container { height: 40%; overflow-y: auto; background: white; border-top: 3px solid #f9be00; }
@@ -46,7 +46,7 @@
 const map = L.map('map').setView([24.1373, 120.6856], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
-// --- 距離與路徑演算法 (GeoJSON 處理) ---
+// --- 距離與路徑演算法 (整合您提供的 GeoJSON 處理邏輯) ---
 function calculateDistance(coord1, coord2) {
     const [lon1, lat1] = coord1;
     const [lon2, lat2] = coord2;
@@ -57,11 +57,12 @@ function calculateDistance(coord1, coord2) {
     return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// 處理路徑串連
 function processGeoJSON(geojson) {
     geojson.features = geojson.features.map(feature => {
         if (feature.geometry.type === 'MultiLineString') {
             const segments = feature.geometry.coordinates;
-            // 此處簡化處理，直接顯示。若需更複雜串連可再加入您的完整 logic
+            // 簡化處理：將多段線段攤平為連續線段
             feature.geometry = { type: 'LineString', coordinates: segments.flat() };
         }
         return feature;
@@ -79,10 +80,10 @@ async function startApp() {
         map.setView([uLat, uLng], 16);
         L.marker([uLat, uLng]).addTo(map).bindPopup("<b>📍 您在這裡</b>").openPopup();
 
-        // 1. 抓取台中官方 JSON 資料
+        // 1. 抓取台中官方 JSON 資料 (不需金鑰)
         await fetchBikeData(uLat, uLng);
 
-        // 2. 處理您的 Route20OK.geojson 檔案
+        // 2. 處理您的 GeoJSON 檔案 (Route20OK.geojson)
         try {
             const geoRes = await fetch('Route20OK.geojson');
             if (geoRes.ok) {
@@ -92,7 +93,10 @@ async function startApp() {
             }
         } catch (e) { console.warn("GeoJSON 載入跳過"); }
 
-    }, () => alert("定位失敗，請確認已開啟 GPS 與 HTTPS"));
+    }, (err) => {
+        alert("定位失敗，請確認已開啟 GPS 與 HTTPS 連線。");
+        document.getElementById('overlay').style.display = 'flex';
+    });
 }
 
 async function fetchBikeData(uLat, uLng) {
@@ -100,7 +104,7 @@ async function fetchBikeData(uLat, uLng) {
     tbody.innerHTML = '<tr><td colspan="4">正在努力載入即時資料...</td></tr>';
     
     try {
-        // 使用台中官方 JSON 網址並透過穩定代理 corsproxy.io
+        // 使用官方 JSON 網址，並透過代理伺服器 corsproxy.io 繞過 CORS 限制
         const officialUrl = "https://ybjson02.youbike.com.tw:60008/yb2/taichung/gwjs.json";
         const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(officialUrl)}`;
 
@@ -108,7 +112,7 @@ async function fetchBikeData(uLat, uLng) {
         if (!response.ok) throw new Error();
         
         const rawData = await response.json();
-        const data = rawData.retVal; // 官方格式主體在 retVal
+        const data = rawData.retVal; // 官方格式主體在 retVal 欄位
 
         const stations = Object.keys(data).map(k => {
             const s = data[k];
