@@ -3,20 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>台中 YouBike 2.0 即時地圖</title>
+    <title>台中 YouBike 官方即時地圖</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
         html, body { height: 100%; margin: 0; font-family: "Microsoft JhengHei", sans-serif; }
         .container { display: flex; flex-direction: column; height: 100%; }
         #map { flex: 1; z-index: 1; }
-        #list-container { height: 40%; overflow-y: auto; background: white; border-top: 3px solid #007bff; }
+        #list-container { height: 45%; overflow-y: auto; background: white; border-top: 3px solid #f9be00; }
         table { width: 100%; border-collapse: collapse; }
-        th { background: #007bff; color: white; position: sticky; top: 0; padding: 12px; z-index: 10; }
-        td { padding: 12px 8px; border-bottom: 1px solid #eee; text-align: center; }
+        th { background: #f9be00; color: #333; position: sticky; top: 0; padding: 12px; z-index: 10; }
+        td { padding: 10px 5px; border-bottom: 1px solid #eee; text-align: center; font-size: 0.95em; }
         .available { color: #2e7d32; font-weight: bold; }
         .empty { color: #d32f2f; font-weight: bold; }
-
+        
         /* 詢問層 */
         #overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -25,17 +25,17 @@
         }
         .start-btn {
             padding: 15px 40px; font-size: 1.2rem; cursor: pointer;
-            background: #007bff; color: white; border: none; border-radius: 50px; font-weight: bold;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+            background: #f9be00; border: none; border-radius: 50px; font-weight: bold;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
         }
     </style>
 </head>
 <body>
 
 <div id="overlay">
-    <div style="font-size: 50px; margin-bottom: 10px;">🚲</div>
-    <h2>台中市 YouBike 2.0 查詢</h2>
-    <p>點擊按鈕授權定位，尋找台中的即時車位</p>
+    <div style="font-size: 60px; margin-bottom: 10px;">🚲</div>
+    <h2>台中 YouBike 官方即時查詢</h2>
+    <p>請點擊按鈕授權定位，尋找附近的 2.0 站點</p>
     <button class="start-btn" onclick="startApp()">開啟定位並查詢</button>
 </div>
 
@@ -45,7 +45,7 @@
         <table>
             <thead>
                 <tr>
-                    <th>站點</th>
+                    <th>站點名稱</th>
                     <th>距離</th>
                     <th>可借</th>
                     <th>可還</th>
@@ -57,7 +57,6 @@
 </div>
 
 <script>
-// 初始化地圖 (預設台中火車站)
 const map = L.map('map').setView([24.1373, 120.6856], 15);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
@@ -66,50 +65,51 @@ let userMarker;
 function startApp() {
     document.getElementById('overlay').style.display = 'none';
     
-    if (!navigator.geolocation) {
-        alert("您的瀏覽器不支援定位功能。");
-        return;
-    }
-
     navigator.geolocation.getCurrentPosition(async (pos) => {
         const { latitude: lat, longitude: lng } = pos.coords;
-        
         if (userMarker) map.removeLayer(userMarker);
         userMarker = L.marker([lat, lng]).addTo(map).bindPopup("<b>📍 您在這裡</b>").openPopup();
         map.setView([lat, lng], 16);
-
-        await fetchTaichungData(lat, lng);
+        await fetchOfficialData(lat, lng);
     }, (err) => {
-        alert("定位失敗，請確保已開啟 GPS 權限。");
+        alert("定位失敗，請確認已開啟 GPS。");
         document.getElementById('overlay').style.display = 'flex';
     });
 }
 
-async function fetchTaichungData(uLat, uLng) {
+async function fetchOfficialData(uLat, uLng) {
     const tbody = document.getElementById('bikeList');
-    tbody.innerHTML = '<tr><td colspan="4">正在讀取台中即時資料...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4">讀取官方即時資料中...</td></tr>';
 
     try {
-        // 使用指定的台中市政府 API 網址，並透過 corsproxy.io 解決跨網域問題
-        const taichungApi = "https://newdatacenter.taichung.gov.tw/api/v1/no-auth/resource.download?rid=0987012e-cec8-4bd2-9d39-704f4d827087";
-        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(taichungApi)}`;
+        // 使用官方 JSON 網址 + 代理伺服器
+        const officialApi = "https://ybjson02.youbike.com.tw:60008/yb2/taichung/gwjs.json";
+        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(officialApi)}`;
 
         const response = await fetch(proxyUrl);
-        if (!response.ok) throw new Error("API 連線失敗");
+        if (!response.ok) throw new Error("官方伺服器連線失敗");
         
-        const data = await response.json();
+        const rawData = await response.json();
+        
+        // 官方資料通常包在 retVal 裡面
+        const data = rawData.retVal;
 
-        // 整理並排序資料
-        const stations = data.map(s => ({
-            name: s.sna.replace("YouBike2.0_", ""),
-            lat: s.lat,
-            lng: s.lng,
-            available: s.sbi, // 可借
-            empty: s.bemp,    // 可還
-            distance: calcDist(uLat, uLng, s.lat, s.lng)
-        }))
+        // 將物件轉為陣列並處理資料
+        const stations = Object.keys(data).map(key => {
+            const s = data[key];
+            const sLat = parseFloat(s.lat);
+            const sLng = parseFloat(s.lng);
+            return {
+                name: s.sna.replace("YouBike2.0_", ""),
+                lat: sLat,
+                lng: sLng,
+                available: parseInt(s.sbi), // 可借
+                empty: parseInt(s.bemp),    // 可還
+                distance: calcDist(uLat, uLng, sLat, sLng)
+            };
+        })
         .sort((a, b) => a.distance - b.distance)
-        .slice(0, 25); // 取最近 25 站
+        .slice(0, 30); // 取最近 30 站
 
         tbody.innerHTML = "";
         stations.forEach(s => {
@@ -128,7 +128,7 @@ async function fetchTaichungData(uLat, uLng) {
 
     } catch (err) {
         console.error(err);
-        tbody.innerHTML = '<tr><td colspan="4" style="color:red">無法取得台中 API 資料，請檢查連線。</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="4" style="color:red">無法取得官方 API。請檢查網路或稍後再試。</td></tr>';
     }
 }
 
