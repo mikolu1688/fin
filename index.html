@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>台中 YouBike 2.0 找車地圖 (含路徑串連)</title>
+    <title>台中 YouBike 2.0 找車地圖 (修正版)</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
@@ -14,8 +14,6 @@
         table { width: 100%; border-collapse: collapse; }
         th { background: #f9be00; color: #333; position: sticky; top: 0; padding: 12px; z-index: 10; }
         td { padding: 12px 8px; border-bottom: 1px solid #eee; text-align: center; }
-        .available { color: #2e7d32; font-weight: bold; }
-        .empty { color: #d32f2f; font-weight: bold; }
         #overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #fff; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; }
         .start-btn { padding: 15px 40px; font-size: 1.2rem; cursor: pointer; background: #f9be00; border: none; border-radius: 50px; font-weight: bold; }
     </style>
@@ -46,7 +44,7 @@
 const map = L.map('map').setView([24.1373, 120.6856], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
-// --- 整合您提供的路徑串連演算法 (前端版) ---
+// --- 距離與路徑演算法 ---
 
 function calculateDistance(coord1, coord2) {
     const [lon1, lat1] = coord1;
@@ -97,7 +95,6 @@ function connectSegments(segments, extremeEndpoints) {
     return path;
 }
 
-// 處理 GeoJSON 資料的函式
 function processGeoJSON(geojson) {
     geojson.features = geojson.features.map(feature => {
         if (feature.geometry.type === 'MultiLineString') {
@@ -120,61 +117,78 @@ async function startApp() {
         const uLat = pos.coords.latitude;
         const uLng = pos.coords.longitude;
         map.setView([uLat, uLng], 15);
-        L.marker([uLat, uLng]).addTo(map).bindPopup("您的位置").openPopup();
+        L.marker([uLat, uLng]).addTo(map).bindPopup("<b>您的位置</b>").openPopup();
 
-        // 1. 抓取並顯示 YouBike 站點
+        // 呼叫抓取站點函式
         await fetchBikeData(uLat, uLng);
 
-        // 2. 載入並處理您的 GeoJSON 路徑檔案 (例如 Route20OK.geojson)
-        // 注意：檔案必須放在 GitHub 同一個資料夾內
+        // 載入 GeoJSON 路線 (如果有的話)
         try {
             const geoResponse = await fetch('Route20OK.geojson');
             if (geoResponse.ok) {
                 let geojsonData = await geoResponse.json();
-                geojsonData = processGeoJSON(geojsonData); // 使用演算法優化路徑
-                
-                L.geoJSON(geojsonData, {
-                    style: { color: "#ff4757", weight: 6, opacity: 0.8 }
-                }).addTo(map);
-                console.log("路徑資料處理完成並已繪製地圖。");
+                geojsonData = processGeoJSON(geojsonData);
+                L.geoJSON(geojsonData, { style: { color: "#ff4757", weight: 6, opacity: 0.8 } }).addTo(map);
             }
-        } catch (err) {
-            console.log("未載入 GeoJSON 檔案或檔案路徑錯誤。");
-        }
+        } catch (err) { console.log("GeoJSON 載入跳過"); }
 
-    }, () => alert("定位失敗"));
+    }, (err) => {
+        alert("定位失敗，請確認是否開啟 GPS 與 HTTPS 連線");
+    });
 }
 
+// 修正後的抓取站點函式
 async function fetchBikeData(uLat, uLng) {
     const tbody = document.getElementById('bikeList');
     tbody.innerHTML = '<tr><td colspan="4">資料加載中...</td></tr>';
+    
     try {
         const api = "https://ybjson02.youbike.com.tw:60008/yb2/taichung/gwjs.json";
         const proxy = `https://corsproxy.io/?${encodeURIComponent(api)}`;
+        
         const res = await fetch(proxy);
+        if (!res.ok) throw new Error("連線失敗");
+        
         const json = await res.json();
-        const data = json.retVal;
+        const data = json.retVal; // 官方資料在 retVal 裡面
 
+        // 處理並排序
         const stations = Object.keys(data).map(k => {
             const s = data[k];
-            const sLat = parseFloat(s.lat), sLng = parseFloat(s.lng);
+            const sLat = parseFloat(s.lat);
+            const sLng = parseFloat(s.lng);
             return {
                 name: s.sna.replace("YouBike2.0_", ""),
-                lat: sLat, lng: sLng,
-                sbi: parseInt(s.sbi), bemp: parseInt(s.bemp),
+                lat: sLat,
+                lng: sLng,
+                sbi: parseInt(s.sbi), // 可借
+                bemp: parseInt(s.bemp), // 可還
+                // 修正座標傳遞順序：[經度, 緯度]
                 dist: calculateDistance([uLng, uLat], [sLng, sLat])
             };
-        }).sort((a,b) => a.dist - b.dist).slice(0, 25);
+        })
+        .sort((a, b) => a.dist - b.dist)
+        .slice(0, 25); // 取最近 25 站
 
         tbody.innerHTML = "";
         stations.forEach(s => {
-            L.marker([s.lat, s.lng]).addTo(map).bindPopup(`<b>${s.name}</b><br>可借：${s.sbi}`);
+            // 在地圖上加上標記
+            L.marker([s.lat, s.lng]).addTo(map)
+                .bindPopup(`<b>${s.name}</b><br>🚲 可借：${s.sbi}<br>🅿️ 可還：${s.bemp}`);
+
+            // 寫入表格
             const tr = document.createElement('tr');
-            tr.innerHTML = `<td>${s.name}</td><td>${Math.round(s.dist)}m</td><td class="${s.sbi > 0 ? 'available' : 'empty'}">${s.sbi}</td><td>${s.bemp}</td>`;
+            tr.innerHTML = `
+                <td style="text-align:left">${s.name}</td>
+                <td>${Math.round(s.dist)}m</td>
+                <td style="color:${s.sbi > 0 ? 'green' : 'red'}; font-weight:bold;">${s.sbi}</td>
+                <td>${s.bemp}</td>
+            `;
             tbody.appendChild(tr);
         });
     } catch (e) {
-        tbody.innerHTML = '<tr><td colspan="4">API 連線失敗</td></tr>';
+        console.error(e);
+        tbody.innerHTML = '<tr><td colspan="4" style="color:red">無法取得官方 API 資料</td></tr>';
     }
 }
 </script>
