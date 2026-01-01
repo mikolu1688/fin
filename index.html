@@ -3,48 +3,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>台中 YouBike 2.0 官方即時地圖</title>
-
+    <title>台中 YouBike 2.0 找車地圖 (含路徑串連)</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
     <style>
         html, body { height: 100%; margin: 0; font-family: "Microsoft JhengHei", sans-serif; }
         .container { display: flex; flex-direction: column; height: 100%; }
         #map { flex: 1; z-index: 1; }
-        
-        /* 列表樣式 */
-        #list-container { height: 45%; overflow-y: auto; background: white; border-top: 3px solid #f9be00; }
+        #list-container { height: 40%; overflow-y: auto; background: white; border-top: 3px solid #f9be00; }
         table { width: 100%; border-collapse: collapse; }
-        th { background: #f9be00; color: #333; position: sticky; top: 0; padding: 12px; z-index: 10; font-size: 1.1em; }
-        td { padding: 12px 5px; border-bottom: 1px solid #eee; text-align: center; font-size: 1em; }
-        
-        /* 數字顏色 */
+        th { background: #f9be00; color: #333; position: sticky; top: 0; padding: 12px; z-index: 10; }
+        td { padding: 12px 8px; border-bottom: 1px solid #eee; text-align: center; }
         .available { color: #2e7d32; font-weight: bold; }
         .empty { color: #d32f2f; font-weight: bold; }
-
-        /* 啟動詢問層 */
-        #overlay {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: #fff; display: flex; flex-direction: column; 
-            justify-content: center; align-items: center; z-index: 9999;
-        }
-        .start-btn {
-            padding: 18px 50px; font-size: 1.3rem; cursor: pointer;
-            background: #f9be00; border: none; border-radius: 50px; font-weight: bold;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-            transition: transform 0.2s;
-        }
-        .start-btn:active { transform: scale(0.95); }
+        #overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #fff; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; }
+        .start-btn { padding: 15px 40px; font-size: 1.2rem; cursor: pointer; background: #f9be00; border: none; border-radius: 50px; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div id="overlay">
-    <div style="font-size: 70px; margin-bottom: 20px;">🚲</div>
-    <h2 style="margin: 10px;">台中 YouBike 即時地圖</h2>
-    <p style="color: #666; margin-bottom: 30px;">請點擊下方按鈕以允許取得您的位置<br>我們將自動為您尋找最近的 2.0 站點</p>
-    <button class="start-btn" onclick="startApp()">開啟定位並查詢</button>
+    <div style="font-size: 60px;">🚲</div>
+    <h2>台中 YouBike 2.0 查詢系統</h2>
+    <p>點擊按鈕授權定位並載入路線資料</p>
+    <button class="start-btn" onclick="startApp()">開始使用</button>
 </div>
 
 <div class="container">
@@ -52,124 +34,148 @@
     <div id="list-container">
         <table>
             <thead>
-                <tr>
-                    <th style="width: 40%;">站點名稱</th>
-                    <th>距離</th>
-                    <th>可借</th>
-                    <th>可還</th>
-                </tr>
+                <tr><th>站點名稱</th><th>距離</th><th>可借</th><th>可還</th></tr>
             </thead>
-            <tbody id="bikeList">
-                <tr><td colspan="4">請先完成定位授權...</td></tr>
-            </tbody>
+            <tbody id="bikeList"></tbody>
         </table>
     </div>
 </div>
 
 <script>
-// 1. 初始化地圖 (預設台中火車站)
-const map = L.map('map').setView([24.1373, 120.6856], 15);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap contributors'
-}).addTo(map);
+// --- 地圖初始化 ---
+const map = L.map('map').setView([24.1373, 120.6856], 13);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
-let userMarker;
+// --- 整合您提供的路徑串連演算法 (前端版) ---
 
-// 2. 啟動按鈕觸發事件
-function startApp() {
+function calculateDistance(coord1, coord2) {
+    const [lon1, lat1] = coord1;
+    const [lon2, lat2] = coord2;
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLon = (lon2 - lon1) * (Math.PI / 180);
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function findExtremeEndpoints(segments) {
+    const endpoints = [];
+    segments.forEach(segment => endpoints.push(segment[0], segment[segment.length - 1]));
+    const scores = endpoints.map((endpoint, i) => {
+        let score = 0;
+        endpoints.forEach((other, j) => { if (i !== j) score += calculateDistance(endpoint, other); });
+        return { point: endpoint, score };
+    });
+    scores.sort((a, b) => b.score - a.score);
+    return [scores[0].point, scores[1].point];
+}
+
+function connectSegments(segments, extremeEndpoints) {
+    const [extremeStart, extremeEnd] = extremeEndpoints;
+    let path = [extremeStart];
+    let currentPoint = extremeStart;
+    const gapTolerance = 50; 
+
+    while (segments.length > 0) {
+        let closestIndex = -1, closestSegment = null, closestDistance = Infinity, reverse = false;
+        for (let i = 0; i < segments.length; i++) {
+            const segment = segments[i], start = segment[0], end = segment[segment.length - 1];
+            const distStart = calculateDistance(currentPoint, start), distEnd = calculateDistance(currentPoint, end);
+            if (distStart < closestDistance) { closestDistance = distStart; closestIndex = i; closestSegment = segment; reverse = false; }
+            if (distEnd < closestDistance) { closestDistance = distEnd; closestIndex = i; closestSegment = segment; reverse = true; }
+        }
+        if (closestSegment) {
+            if (reverse) closestSegment.reverse();
+            if (closestDistance <= gapTolerance) {
+                path.push([(currentPoint[0] + closestSegment[0][0]) / 2, (currentPoint[1] + closestSegment[0][1]) / 2]);
+            }
+            path.push(...closestSegment);
+            currentPoint = path[path.length - 1];
+            segments.splice(closestIndex, 1);
+        } else { break; }
+    }
+    return path;
+}
+
+// 處理 GeoJSON 資料的函式
+function processGeoJSON(geojson) {
+    geojson.features = geojson.features.map(feature => {
+        if (feature.geometry.type === 'MultiLineString') {
+            const segments = feature.geometry.coordinates;
+            const extremeEndpoints = findExtremeEndpoints(segments);
+            const orderedCoordinates = connectSegments(segments, extremeEndpoints);
+            feature.geometry = { type: 'LineString', coordinates: orderedCoordinates };
+        }
+        return feature;
+    });
+    return geojson;
+}
+
+// --- 主要執行邏輯 ---
+
+async function startApp() {
     document.getElementById('overlay').style.display = 'none';
     
-    // 檢查瀏覽器定位支援
-    if (!navigator.geolocation) {
-        alert("您的瀏覽器不支援定位功能。");
-        return;
-    }
-
     navigator.geolocation.getCurrentPosition(async (pos) => {
         const uLat = pos.coords.latitude;
         const uLng = pos.coords.longitude;
-        
-        // 標記使用者位置
-        if (userMarker) map.removeLayer(userMarker);
-        userMarker = L.marker([uLat, uLng]).addTo(map).bindPopup("<b>📍 您在這裡</b>").openPopup();
-        map.setView([uLat, uLng], 16);
+        map.setView([uLat, uLng], 15);
+        L.marker([uLat, uLng]).addTo(map).bindPopup("您的位置").openPopup();
 
-        // 開始抓取官方 API 資料
-        await fetchOfficialBikeData(uLat, uLng);
-    }, (err) => {
-        alert("定位失敗！請確保已開啟手機/電腦的 GPS 權限，並允許瀏覽器存取位置。");
-        document.getElementById('overlay').style.display = 'flex';
-    });
+        // 1. 抓取並顯示 YouBike 站點
+        await fetchBikeData(uLat, uLng);
+
+        // 2. 載入並處理您的 GeoJSON 路徑檔案 (例如 Route20OK.geojson)
+        // 注意：檔案必須放在 GitHub 同一個資料夾內
+        try {
+            const geoResponse = await fetch('Route20OK.geojson');
+            if (geoResponse.ok) {
+                let geojsonData = await geoResponse.json();
+                geojsonData = processGeoJSON(geojsonData); // 使用演算法優化路徑
+                
+                L.geoJSON(geojsonData, {
+                    style: { color: "#ff4757", weight: 6, opacity: 0.8 }
+                }).addTo(map);
+                console.log("路徑資料處理完成並已繪製地圖。");
+            }
+        } catch (err) {
+            console.log("未載入 GeoJSON 檔案或檔案路徑錯誤。");
+        }
+
+    }, () => alert("定位失敗"));
 }
 
-// 3. 抓取官方 API 並處理
-async function fetchOfficialBikeData(uLat, uLng) {
+async function fetchBikeData(uLat, uLng) {
     const tbody = document.getElementById('bikeList');
-    tbody.innerHTML = '<tr><td colspan="4">連線至 YouBike 官方伺服器中...</td></tr>';
-
+    tbody.innerHTML = '<tr><td colspan="4">資料加載中...</td></tr>';
     try {
-        // 官方台中 2.0 API 網址
-        const officialUrl = "https://ybjson02.youbike.com.tw:60008/yb2/taichung/gwjs.json";
-        
-        // 使用 corsproxy.io 解決 GitHub Pages 的跨網域攔截問題
-        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(officialUrl)}`;
+        const api = "https://ybjson02.youbike.com.tw:60008/yb2/taichung/gwjs.json";
+        const proxy = `https://corsproxy.io/?${encodeURIComponent(api)}`;
+        const res = await fetch(proxy);
+        const json = await res.json();
+        const data = json.retVal;
 
-        const response = await fetch(proxyUrl);
-        if (!response.ok) throw new Error("官方伺服器回應異常");
-        
-        const rawData = await response.json();
-        
-        // 官方 JSON 格式：站點資料位於 retVal 物件中
-        const data = rawData.retVal;
-
-        // 將物件轉為陣列並計算距離、排序
-        const stations = Object.keys(data).map(key => {
-            const s = data[key];
-            const sLat = parseFloat(s.lat);
-            const sLng = parseFloat(s.lng);
+        const stations = Object.keys(data).map(k => {
+            const s = data[k];
+            const sLat = parseFloat(s.lat), sLng = parseFloat(s.lng);
             return {
                 name: s.sna.replace("YouBike2.0_", ""),
-                lat: sLat,
-                lng: sLng,
-                available: parseInt(s.sbi), // 可借車數
-                empty: parseInt(s.bemp),    // 可還空位
-                distance: calcDistance(uLat, uLng, sLat, sLng)
+                lat: sLat, lng: sLng,
+                sbi: parseInt(s.sbi), bemp: parseInt(s.bemp),
+                dist: calculateDistance([uLng, uLat], [sLng, sLat])
             };
-        })
-        .sort((a, b) => a.distance - b.distance) // 依距離排序
-        .slice(0, 30); // 顯示最近 30 個站點
+        }).sort((a,b) => a.dist - b.dist).slice(0, 25);
 
-        // 渲染列表與地圖標記
         tbody.innerHTML = "";
         stations.forEach(s => {
-            // 地圖標記
-            L.marker([s.lat, s.lng]).addTo(map)
-                .bindPopup(`<b>${s.name}</b><br>🚲 可借：${s.available}<br>🅿️ 可還：${s.empty}`);
-
-            // 列表列
+            L.marker([s.lat, s.lng]).addTo(map).bindPopup(`<b>${s.name}</b><br>可借：${s.sbi}`);
             const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td style="text-align:left; padding-left:10px;">${s.name}</td>
-                <td>${Math.round(s.distance)}m</td>
-                <td class="${s.available > 0 ? 'available' : 'empty'}">${s.available}</td>
-                <td>${s.empty}</td>
-            `;
+            tr.innerHTML = `<td>${s.name}</td><td>${Math.round(s.dist)}m</td><td class="${s.sbi > 0 ? 'available' : 'empty'}">${s.sbi}</td><td>${s.bemp}</td>`;
             tbody.appendChild(tr);
         });
-
-    } catch (err) {
-        console.error(err);
-        tbody.innerHTML = '<tr><td colspan="4" style="color:red; padding:20px;">資料讀取失敗！<br>請確認網路連線或稍後再試。</td></tr>';
+    } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="4">API 連線失敗</td></tr>';
     }
-}
-
-// 4. 距離計算函式 (Haversine Formula)
-function calcDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371000; // 地球半徑 (公尺)
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 </script>
 </body>
