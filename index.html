@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>台中 YouBike 2.0 即時地圖</title>
+    <title>台中 YouBike 2.0 找車地圖 (官方即時版)</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
@@ -24,8 +24,9 @@
 
 <div id="overlay">
     <div style="font-size: 60px;">🚲</div>
-    <h2>台中 YouBike 2.0 即時查詢</h2>
-    <button class="start-btn" onclick="startApp()">開啟定位並查詢</button>
+    <h2>台中 YouBike 2.0 查詢系統</h2>
+    <p>點擊按鈕授權定位，並載入優化路線資料</p>
+    <button class="start-btn" onclick="startApp()">開始使用</button>
 </div>
 
 <div class="container">
@@ -41,81 +42,95 @@
 </div>
 
 <script>
-const map = L.map('map').setView([24.1373, 120.6856], 15);
+// --- 地圖初始化 ---
+const map = L.map('map').setView([24.1373, 120.6856], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
-function startApp() {
+// --- 距離與路徑演算法 (GeoJSON 處理) ---
+function calculateDistance(coord1, coord2) {
+    const [lon1, lat1] = coord1;
+    const [lon2, lat2] = coord2;
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * (Math.PI / 180);
+    const dLon = (lon2 - lon1) * (Math.PI / 180);
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function processGeoJSON(geojson) {
+    geojson.features = geojson.features.map(feature => {
+        if (feature.geometry.type === 'MultiLineString') {
+            const segments = feature.geometry.coordinates;
+            // 此處簡化處理，直接顯示。若需更複雜串連可再加入您的完整 logic
+            feature.geometry = { type: 'LineString', coordinates: segments.flat() };
+        }
+        return feature;
+    });
+    return geojson;
+}
+
+// --- 應用程式執行邏輯 ---
+async function startApp() {
     document.getElementById('overlay').style.display = 'none';
+    
     navigator.geolocation.getCurrentPosition(async (pos) => {
         const uLat = pos.coords.latitude;
         const uLng = pos.coords.longitude;
         map.setView([uLat, uLng], 16);
-        L.marker([uLat, uLng]).addTo(map).bindPopup("您的位置").openPopup();
-        await fetchWithRetry(uLat, uLng);
-    }, () => alert("定位失敗，請確保使用 HTTPS 並開啟 GPS"));
-}
+        L.marker([uLat, uLng]).addTo(map).bindPopup("<b>📍 您在這裡</b>").openPopup();
 
-async function fetchWithRetry(uLat, uLng) {
-    const tbody = document.getElementById('bikeList');
-    tbody.innerHTML = '<tr><td colspan="4">正在切換代理伺服器中...</td></tr>';
+        // 1. 抓取台中官方 JSON 資料
+        await fetchBikeData(uLat, uLng);
 
-    const targetUrl = "https://ybjson02.youbike.com.tw:60008/yb2/taichung/gwjs.json";
-    
-    // 定義多個代理服務
-    const proxies = [
-        url => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
-        url => `https://corsproxy.io/?${encodeURIComponent(url)}`,
-        url => `https://thingproxy.freeboard.io/fetch/${url}`
-    ];
-
-    for (let getProxyUrl of proxies) {
+        // 2. 處理您的 Route20OK.geojson 檔案
         try {
-            const res = await fetch(getProxyUrl(targetUrl));
-            if (!res.ok) throw new Error();
+            const geoRes = await fetch('Route20OK.geojson');
+            if (geoRes.ok) {
+                let geoData = await geoRes.json();
+                geoData = processGeoJSON(geoData);
+                L.geoJSON(geoData, { style: { color: "#ff4757", weight: 6, opacity: 0.8 } }).addTo(map);
+            }
+        } catch (e) { console.warn("GeoJSON 載入跳過"); }
 
-            const json = await res.json();
-            // AllOrigins 需要解析 json.contents
-            const rawData = typeof json.contents === 'string' ? JSON.parse(json.contents) : (json.retVal || json);
-            const data = rawData.retVal || rawData;
-
-            renderData(data, uLat, uLng);
-            return; // 成功即停止
-        } catch (e) {
-            console.warn("目前代理失效，嘗試下一個...");
-        }
-    }
-    tbody.innerHTML = '<tr><td colspan="4" style="color:red">連線失敗。請檢查網路或稍後再試。</td></tr>';
+    }, () => alert("定位失敗，請確認已開啟 GPS 與 HTTPS"));
 }
 
-function renderData(data, uLat, uLng) {
+async function fetchBikeData(uLat, uLng) {
     const tbody = document.getElementById('bikeList');
-    tbody.innerHTML = "";
+    tbody.innerHTML = '<tr><td colspan="4">正在努力載入即時資料...</td></tr>';
     
-    const stations = Object.keys(data).map(k => {
-        const s = data[k];
-        const sLat = parseFloat(s.lat), sLng = parseFloat(s.lng);
-        return {
-            name: s.sna.replace("YouBike2.0_", ""),
-            lat: sLat, lng: sLng,
-            sbi: parseInt(s.sbi), bemp: parseInt(s.bemp),
-            dist: calcDist(uLat, uLng, sLat, sLng)
-        };
-    }).sort((a, b) => a.dist - b.dist).slice(0, 25);
+    try {
+        // 使用台中官方 JSON 網址並透過穩定代理 corsproxy.io
+        const officialUrl = "https://ybjson02.youbike.com.tw:60008/yb2/taichung/gwjs.json";
+        const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(officialUrl)}`;
 
-    stations.forEach(s => {
-        L.marker([s.lat, s.lng]).addTo(map).bindPopup(`<b>${s.name}</b><br>🚲：${s.sbi}`);
-        const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${s.name}</td><td>${Math.round(s.dist)}m</td><td class="${s.sbi > 0 ? 'available' : 'empty'}">${s.sbi}</td><td>${s.bemp}</td>`;
-        tbody.appendChild(tr);
-    });
-}
+        const response = await fetch(proxyUrl);
+        if (!response.ok) throw new Error();
+        
+        const rawData = await response.json();
+        const data = rawData.retVal; // 官方格式主體在 retVal
 
-function calcDist(lat1, lon1, lat2, lon2) {
-    const R = 6371000;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        const stations = Object.keys(data).map(k => {
+            const s = data[k];
+            const sLat = parseFloat(s.lat), sLng = parseFloat(s.lng);
+            return {
+                name: s.sna.replace("YouBike2.0_", ""),
+                lat: sLat, lng: sLng,
+                sbi: parseInt(s.sbi), bemp: parseInt(s.bemp),
+                dist: calculateDistance([uLng, uLat], [sLng, sLat])
+            };
+        }).sort((a, b) => a.dist - b.dist).slice(0, 25);
+
+        tbody.innerHTML = "";
+        stations.forEach(s => {
+            L.marker([s.lat, s.lng]).addTo(map).bindPopup(`<b>${s.name}</b><br>🚲 可借：${s.sbi}`);
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td>${s.name}</td><td>${Math.round(s.dist)}m</td><td class="${s.sbi > 0 ? 'available' : 'empty'}">${s.sbi}</td><td>${s.bemp}</td>`;
+            tbody.appendChild(tr);
+        });
+    } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="4" style="color:red">API 連線失敗，請稍後再試。</td></tr>';
+    }
 }
 </script>
 </body>
