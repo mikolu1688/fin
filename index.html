@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>台中 YouBike 2.0 找車地圖 (官方即時版)</title>
+    <title>YouBike 2.0 即時地圖</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
@@ -17,16 +17,16 @@
         .available { color: #2e7d32; font-weight: bold; }
         .empty { color: #d32f2f; font-weight: bold; }
         #overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #fff; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; }
-        .start-btn { padding: 15px 40px; font-size: 1.2rem; cursor: pointer; background: #f9be00; border: none; border-radius: 50px; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        .start-btn { padding: 15px 40px; font-size: 1.2rem; cursor: pointer; background: #f9be00; border: none; border-radius: 50px; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div id="overlay">
     <div style="font-size: 60px;">🚲</div>
-    <h2>台中 YouBike 2.0 查詢系統</h2>
-    <p>點擊按鈕授權定位，並載入優化路線資料</p>
-    <button class="start-btn" onclick="startApp()">開始使用</button>
+    <h2>YouBike 2.0 查詢系統</h2>
+    <p>點擊按鈕授權定位，尋找最近站點</p>
+    <button class="start-btn" onclick="startApp()">開啟定位並查詢</button>
 </div>
 
 <div class="container">
@@ -42,141 +42,73 @@
 </div>
 
 <script>
-// --- 地圖初始化 ---
 const map = L.map('map').setView([24.1373, 120.6856], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
-// --- 整合路徑串連演算法 ---
+let userMarker;
 
-function calculateDistance(coord1, coord2) {
-    const [lon1, lat1] = coord1;
-    const [lon2, lat2] = coord2;
-    const R = 6371000;
-    const dLat = (lat2 - lat1) * (Math.PI / 180);
-    const dLon = (lon2 - lon1) * (Math.PI / 180);
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) ** 2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function findExtremeEndpoints(segments) {
-    const endpoints = [];
-    segments.forEach(segment => endpoints.push(segment[0], segment[segment.length - 1]));
-    const scores = endpoints.map((endpoint, i) => {
-        let score = 0;
-        endpoints.forEach((other, j) => { if (i !== j) score += calculateDistance(endpoint, other); });
-        return { point: endpoint, score };
-    });
-    scores.sort((a, b) => b.score - a.score);
-    return [scores[0].point, scores[1].point];
-}
-
-function connectSegments(segments, extremeEndpoints) {
-    const [extremeStart, extremeEnd] = extremeEndpoints;
-    let path = [extremeStart];
-    let currentPoint = extremeStart;
-    const gapTolerance = 50; 
-
-    while (segments.length > 0) {
-        let closestIndex = -1, closestSegment = null, closestDistance = Infinity, reverse = false;
-        for (let i = 0; i < segments.length; i++) {
-            const segment = segments[i], start = segment[0], end = segment[segment.length - 1];
-            const distStart = calculateDistance(currentPoint, start), distEnd = calculateDistance(currentPoint, end);
-            if (distStart < closestDistance) { closestDistance = distStart; closestIndex = i; closestSegment = segment; reverse = false; }
-            if (distEnd < closestDistance) { closestDistance = distEnd; closestIndex = i; closestSegment = segment; reverse = true; }
-        }
-        if (closestSegment) {
-            if (reverse) closestSegment.reverse();
-            if (closestDistance <= gapTolerance) {
-                path.push([(currentPoint[0] + closestSegment[0][0]) / 2, (currentPoint[1] + closestSegment[0][1]) / 2]);
-            }
-            path.push(...closestSegment);
-            currentPoint = path[path.length - 1];
-            segments.splice(closestIndex, 1);
-        } else { break; }
-    }
-    return path;
-}
-
-function processGeoJSON(geojson) {
-    geojson.features = geojson.features.map(feature => {
-        if (feature.geometry.type === 'MultiLineString') {
-            const segments = feature.geometry.coordinates;
-            const extremeEndpoints = findExtremeEndpoints(segments);
-            const orderedCoordinates = connectSegments(segments, extremeEndpoints);
-            feature.geometry = { type: 'LineString', coordinates: orderedCoordinates };
-        }
-        return feature;
-    });
-    return geojson;
-}
-
-// --- 主要執行邏輯 ---
-
-async function startApp() {
+function startApp() {
     document.getElementById('overlay').style.display = 'none';
-    
     navigator.geolocation.getCurrentPosition(async (pos) => {
         const uLat = pos.coords.latitude;
         const uLng = pos.coords.longitude;
         map.setView([uLat, uLng], 16);
-        L.marker([uLat, uLng]).addTo(map).bindPopup("<b>📍 您在這裡</b>").openPopup();
+        if (userMarker) map.removeLayer(userMarker);
+        userMarker = L.marker([uLat, uLng]).addTo(map).bindPopup("<b>📍 您在這裡</b>").openPopup();
 
-        // 1. 抓取 YouBike 即時資料 (雙重備援)
         await fetchBikeData(uLat, uLng);
-
-        // 2. 處理 GeoJSON 路徑
-        try {
-            const geoRes = await fetch('Route20OK.geojson');
-            if (geoRes.ok) {
-                let geoData = await geoRes.json();
-                geoData = processGeoJSON(geoData);
-                L.geoJSON(geoData, { style: { color: "#ff4757", weight: 6, opacity: 0.8 } }).addTo(map);
-            }
-        } catch (e) { console.log("GeoJSON 載入跳過"); }
-
     }, () => alert("定位失敗，請確認已開啟 GPS 與 HTTPS"));
 }
 
 async function fetchBikeData(uLat, uLng) {
     const tbody = document.getElementById('bikeList');
-    tbody.innerHTML = '<tr><td colspan="4">正在連線至即時資料庫...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4">正在嘗試連線至多個資料庫...</td></tr>';
     
-    const sources = [
-        { name: "官方 API", url: "https://ybjson02.youbike.com.tw:60008/yb2/taichung/gwjs.json", isOfficial: true },
-        { name: "市府 API", url: "https://newdatacenter.taichung.gov.tw/api/v1/no-auth/resource.download?rid=0987012e-cec8-4bd2-9d39-704f4d827087", isOfficial: false }
+    // 這裡我們改用更開放的台北 API 或台中 API 測試，並使用不同的 Proxy
+    const apiSources = [
+        "https://tcgbusfs.blob.core.windows.net/dotapp/youbike/v2/youbike_immediate.json", // 台北 (最穩)
+        "https://newdatacenter.taichung.gov.tw/api/v1/no-auth/resource.download?rid=0987012e-cec8-4bd2-9d39-704f4d827087" // 台中
     ];
 
-    for (let source of sources) {
+    for (let apiUrl of apiSources) {
         try {
-            const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(source.url)}`;
+            // 使用 api.allorigins.win 作為備援代理
+            const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(apiUrl)}`;
             const res = await fetch(proxyUrl);
-            if (!res.ok) throw new Error();
-            
-            const json = await res.json();
-            let rawData = source.isOfficial ? json.retVal : json;
+            const jsonWrapper = await res.json();
+            const data = JSON.parse(jsonWrapper.contents);
 
-            const stations = Object.keys(rawData).map(k => {
-                const s = rawData[k];
+            const stations = data.map(s => {
                 const sLat = parseFloat(s.lat), sLng = parseFloat(s.lng);
                 return {
                     name: s.sna.replace("YouBike2.0_", ""),
                     lat: sLat, lng: sLng,
                     sbi: parseInt(s.sbi), bemp: parseInt(s.bemp),
-                    dist: calculateDistance([uLng, uLat], [sLng, sLat])
+                    dist: calcDist(uLat, uLng, sLat, sLng)
                 };
-            }).sort((a, b) => a.dist - b.dist).slice(0, 25);
+            }).sort((a, b) => a.dist - b.dist).slice(0, 20);
 
             tbody.innerHTML = "";
             stations.forEach(s => {
-                L.marker([s.lat, s.lng]).addTo(map).bindPopup(`<b>${s.name}</b><br>🚲 可借：${s.sbi}`);
+                L.marker([s.lat, s.lng]).addTo(map).bindPopup(`<b>${s.name}</b><br>🚲：${s.sbi}`);
                 const tr = document.createElement('tr');
                 tr.innerHTML = `<td>${s.name}</td><td>${Math.round(s.dist)}m</td><td class="${s.sbi > 0 ? 'available' : 'empty'}">${s.sbi}</td><td>${s.bemp}</td>`;
                 tbody.appendChild(tr);
             });
-            return; 
-        } catch (e) { continue; }
+            return; // 成功後直接跳出
+        } catch (e) {
+            console.error("來源失敗，嘗試下一個...", e);
+        }
     }
-    tbody.innerHTML = '<tr><td colspan="4" style="color:red">無法取得即時資料，請檢查網路。</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" style="color:red">API 連線失敗，請檢查網路環境。</td></tr>';
+}
+
+function calcDist(lat1, lon1, lat2, lon2) {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 </script>
 </body>
