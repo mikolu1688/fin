@@ -1,0 +1,25 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "測試路徑 - 台中市區段",
+        "description": "這是一個破碎的線段，用於測試自動串連演算法"
+      },
+      "geometry": {
+        "type": "MultiLineString",
+        "coordinates": [
+          [
+            [120.6856, 24.1373],
+            [120.6865, 24.1385]
+          ],
+          [
+            [120.6875, 24.1395],
+            [120.6865, 24.1385]
+          ]
+        ]
+      }
+    }
+  ]
+}
