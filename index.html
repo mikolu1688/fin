@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>台中 YouBike 2.0 找車地圖 (修正版)</title>
+    <title>台中 YouBike 2.0 找車地圖 (官方即時版)</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <style>
@@ -14,8 +14,10 @@
         table { width: 100%; border-collapse: collapse; }
         th { background: #f9be00; color: #333; position: sticky; top: 0; padding: 12px; z-index: 10; }
         td { padding: 12px 8px; border-bottom: 1px solid #eee; text-align: center; }
+        .available { color: #2e7d32; font-weight: bold; }
+        .empty { color: #d32f2f; font-weight: bold; }
         #overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #fff; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; }
-        .start-btn { padding: 15px 40px; font-size: 1.2rem; cursor: pointer; background: #f9be00; border: none; border-radius: 50px; font-weight: bold; }
+        .start-btn { padding: 15px 40px; font-size: 1.2rem; cursor: pointer; background: #f9be00; border: none; border-radius: 50px; font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
     </style>
 </head>
 <body>
@@ -23,7 +25,7 @@
 <div id="overlay">
     <div style="font-size: 60px;">🚲</div>
     <h2>台中 YouBike 2.0 查詢系統</h2>
-    <p>點擊按鈕授權定位並載入路線資料</p>
+    <p>點擊按鈕授權定位，並載入優化路線資料</p>
     <button class="start-btn" onclick="startApp()">開始使用</button>
 </div>
 
@@ -44,7 +46,7 @@
 const map = L.map('map').setView([24.1373, 120.6856], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
-// --- 距離與路徑演算法 ---
+// --- 整合路徑串連演算法 ---
 
 function calculateDistance(coord1, coord2) {
     const [lon1, lat1] = coord1;
@@ -116,80 +118,65 @@ async function startApp() {
     navigator.geolocation.getCurrentPosition(async (pos) => {
         const uLat = pos.coords.latitude;
         const uLng = pos.coords.longitude;
-        map.setView([uLat, uLng], 15);
-        L.marker([uLat, uLng]).addTo(map).bindPopup("<b>您的位置</b>").openPopup();
+        map.setView([uLat, uLng], 16);
+        L.marker([uLat, uLng]).addTo(map).bindPopup("<b>📍 您在這裡</b>").openPopup();
 
-        // 呼叫抓取站點函式
+        // 1. 抓取 YouBike 即時資料 (雙重備援)
         await fetchBikeData(uLat, uLng);
 
-        // 載入 GeoJSON 路線 (如果有的話)
+        // 2. 處理 GeoJSON 路徑
         try {
-            const geoResponse = await fetch('Route20OK.geojson');
-            if (geoResponse.ok) {
-                let geojsonData = await geoResponse.json();
-                geojsonData = processGeoJSON(geojsonData);
-                L.geoJSON(geojsonData, { style: { color: "#ff4757", weight: 6, opacity: 0.8 } }).addTo(map);
+            const geoRes = await fetch('Route20OK.geojson');
+            if (geoRes.ok) {
+                let geoData = await geoRes.json();
+                geoData = processGeoJSON(geoData);
+                L.geoJSON(geoData, { style: { color: "#ff4757", weight: 6, opacity: 0.8 } }).addTo(map);
             }
-        } catch (err) { console.log("GeoJSON 載入跳過"); }
+        } catch (e) { console.log("GeoJSON 載入跳過"); }
 
-    }, (err) => {
-        alert("定位失敗，請確認是否開啟 GPS 與 HTTPS 連線");
-    });
+    }, () => alert("定位失敗，請確認已開啟 GPS 與 HTTPS"));
 }
 
-// 修正後的抓取站點函式
 async function fetchBikeData(uLat, uLng) {
     const tbody = document.getElementById('bikeList');
-    tbody.innerHTML = '<tr><td colspan="4">資料加載中...</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4">正在連線至即時資料庫...</td></tr>';
     
-    try {
-        const api = "https://ybjson02.youbike.com.tw:60008/yb2/taichung/gwjs.json";
-        const proxy = `https://corsproxy.io/?${encodeURIComponent(api)}`;
-        
-        const res = await fetch(proxy);
-        if (!res.ok) throw new Error("連線失敗");
-        
-        const json = await res.json();
-        const data = json.retVal; // 官方資料在 retVal 裡面
+    const sources = [
+        { name: "官方 API", url: "https://ybjson02.youbike.com.tw:60008/yb2/taichung/gwjs.json", isOfficial: true },
+        { name: "市府 API", url: "https://newdatacenter.taichung.gov.tw/api/v1/no-auth/resource.download?rid=0987012e-cec8-4bd2-9d39-704f4d827087", isOfficial: false }
+    ];
 
-        // 處理並排序
-        const stations = Object.keys(data).map(k => {
-            const s = data[k];
-            const sLat = parseFloat(s.lat);
-            const sLng = parseFloat(s.lng);
-            return {
-                name: s.sna.replace("YouBike2.0_", ""),
-                lat: sLat,
-                lng: sLng,
-                sbi: parseInt(s.sbi), // 可借
-                bemp: parseInt(s.bemp), // 可還
-                // 修正座標傳遞順序：[經度, 緯度]
-                dist: calculateDistance([uLng, uLat], [sLng, sLat])
-            };
-        })
-        .sort((a, b) => a.dist - b.dist)
-        .slice(0, 25); // 取最近 25 站
+    for (let source of sources) {
+        try {
+            const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(source.url)}`;
+            const res = await fetch(proxyUrl);
+            if (!res.ok) throw new Error();
+            
+            const json = await res.json();
+            let rawData = source.isOfficial ? json.retVal : json;
 
-        tbody.innerHTML = "";
-        stations.forEach(s => {
-            // 在地圖上加上標記
-            L.marker([s.lat, s.lng]).addTo(map)
-                .bindPopup(`<b>${s.name}</b><br>🚲 可借：${s.sbi}<br>🅿️ 可還：${s.bemp}`);
+            const stations = Object.keys(rawData).map(k => {
+                const s = rawData[k];
+                const sLat = parseFloat(s.lat), sLng = parseFloat(s.lng);
+                return {
+                    name: s.sna.replace("YouBike2.0_", ""),
+                    lat: sLat, lng: sLng,
+                    sbi: parseInt(s.sbi), bemp: parseInt(s.bemp),
+                    dist: calculateDistance([uLng, uLat], [sLng, sLat])
+                };
+            }).sort((a, b) => a.dist - b.dist).slice(0, 25);
 
-            // 寫入表格
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td style="text-align:left">${s.name}</td>
-                <td>${Math.round(s.dist)}m</td>
-                <td style="color:${s.sbi > 0 ? 'green' : 'red'}; font-weight:bold;">${s.sbi}</td>
-                <td>${s.bemp}</td>
-            `;
-            tbody.appendChild(tr);
-        });
-    } catch (e) {
-        console.error(e);
-        tbody.innerHTML = '<tr><td colspan="4" style="color:red">無法取得官方 API 資料</td></tr>';
+            tbody.innerHTML = "";
+            stations.forEach(s => {
+                L.marker([s.lat, s.lng]).addTo(map).bindPopup(`<b>${s.name}</b><br>🚲 可借：${s.sbi}`);
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>${s.name}</td><td>${Math.round(s.dist)}m</td><td class="${s.sbi > 0 ? 'available' : 'empty'}">${s.sbi}</td><td>${s.bemp}</td>`;
+                tbody.appendChild(tr);
+            });
+            return; 
+        } catch (e) { continue; }
     }
+    tbody.innerHTML = '<tr><td colspan="4" style="color:red">無法取得即時資料，請檢查網路。</td></tr>';
 }
 </script>
 </body>
