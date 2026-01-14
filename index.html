@@ -1,138 +1,160 @@
-<!doctype html>
-<html lang="zh-Hant">
+<!DOCTYPE HTML>
+<html>
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-  <title>台中 YouBike 2.0 定位導航</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <style>
-    body { margin: 0; font-family: system-ui, sans-serif; display: flex; flex-direction: column; height: 100vh; }
-    #bar { padding: 12px; background: white; z-index: 1000; box-shadow: 0 2px 10px rgba(0,0,0,0.1); display: flex; justify-content: space-between; align-items: center; }
-    #map { flex: 1; width: 100%; }
-    #list-container { height: 260px; overflow-y: auto; background: white; border-top: 3px solid #28a745; z-index: 1001; }
-    .list-item { display: flex; justify-content: space-between; padding: 15px; border-bottom: 1px solid #eee; align-items: center; cursor: pointer; }
-    .list-name { font-weight: bold; font-size: 16px; }
-    .bike-num { font-size: 22px; font-weight: bold; }
-    button#btn { padding: 10px 20px; font-size: 16px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
-    
-    /* 彈窗：右手大拇指友善導航 */
-    .leaflet-popup-content-wrapper { padding: 0; overflow: hidden; border-radius: 12px; }
-    .leaflet-popup-content { margin: 0; width: 260px !important; }
-    .popup-flex { display: flex; align-items: stretch; min-height: 100px; }
-    .popup-info { flex: 1; padding: 15px; display: flex; flex-direction: column; justify-content: center; }
-    .nav-btn-right { width: 85px; background: #4285f4; color: white !important; display: flex; flex-direction: column; justify-content: center; align-items: center; text-decoration: none; border-left: 1px solid #eee; }
-  </style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>台中 YouBike 2.0 導航 (TDX修正版)</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; display: flex; flex-direction: column; height: 100vh; background: #f0f2f5; }
+    #bar { padding: 12px; background: white; z-index: 1000; box-shadow: 0 2px 10px rgba(0,0,0,0.1); display: flex; justify-content: space-between; align-items: center; }
+    #map { flex: 1; width: 100%; }
+    #list-container { height: 260px; overflow-y: auto; background: white; border-top: 3px solid #28a745; z-index: 1001; }
+    .list-item { display: flex; justify-content: space-between; padding: 15px; border-bottom: 1px solid #eee; align-items: center; cursor: pointer; }
+    .list-item:active { background: #f1f3f4; }
+    .list-name { font-weight: bold; font-size: 16px; color: #333; }
+    .bike-num { font-size: 24px; font-weight: bold; }
+    button#btn { padding: 10px 20px; font-size: 16px; background: #28a745; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
+    .popup-flex { display: flex; align-items: stretch; min-height: 100px; width: 250px; }
+    .nav-btn-right { width: 80px; background: #4285f4; color: white !important; display: flex; flex-direction: column; justify-content: center; align-items: center; text-decoration: none; border-left: 1px solid #eee; font-weight: bold; }
+  </style>
 </head>
 <body>
-  <div id="bar">
-    <button id="btn" onclick="startApp()">🔍 刷新附近單車</button>
-    <div id="status" style="font-size: 12px; color: #666;">等待定位...</div>
-  </div>
-  <div id="map"></div>
-  <div id="list-container"><div style="padding:40px; text-align:center; color:#999;">啟動後將在此顯示附近站點清單</div></div>
+  <div id="bar">
+    <button id="btn" onclick="startApp()">🔍 尋找附近站點</button>
+    <div id="status" style="font-size: 12px; color: #666;">等待定位...</div>
+  </div>
+  <div id="map"></div>
+  <div id="list-container"><div style="padding:40px; text-align:center; color:#999;">啟動後自動顯示 2km 內排序清單</div></div>
 
-  <script>
-    // 解決 403 核心：直接使用官方 JSONP 檔案
-    const API_URL = "https://ybjson02.youbike.com.tw:60008/yb2/taichung/gwjs.json";
-    let map, userPos, userMarker, stationGroup, markers = {};
+  <script>
+    // 🔴 改用 corsproxy.io，速度通常比較快且穩定
+    const PROXY = "https://corsproxy.io/?";
+    
+    const API_AVAIL = "https://tdx.transportdata.tw/api/basic/v2/Bike/Availability/City/Taichung?%24format=JSON";
+    const API_STATION = "https://tdx.transportdata.tw/api/basic/v2/Bike/Station/City/Taichung?%24format=JSON";
 
-    function initMap(lat, lon) {
-      if (map) return;
-      map = L.map("map", { zoomControl: false }).setView([lat, lon], 16);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
-      stationGroup = L.layerGroup().addTo(map);
-    }
+    let map, userPos, userMarker, stationGroup, markers = {};
 
-    // 利用 <script> 標籤繞過 CORS 與 403 阻擋
-    function loadYouBikeData() {
-      return new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = `${API_URL}?t=${Date.now()}`;
-        script.onload = () => {
-          if (typeof gwjs !== 'undefined') resolve(gwjs.retVal);
-          else reject("資料格式不符");
-        };
-        script.onerror = () => reject("連線超時 (Port 60008 被擋)");
-        document.body.appendChild(script);
-      });
-    }
+    function initMap(lat, lon) {
+      if (map) return;
+      map = L.map("map", { zoomControl: false }).setView([lat, lon], 16);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: '© OpenStreetMap'
+      }).addTo(map);
+      stationGroup = L.layerGroup().addTo(map);
+    }
 
-    async function startApp() {
-      const status = document.getElementById("status");
-      status.innerText = "🛰️ 定位中...";
-      
-      navigator.geolocation.getCurrentPosition(async (pos) => {
-        userPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        initMap(userPos.lat, userPos.lng);
-        map.setView([userPos.lat, userPos.lng], 16);
+    async function startApp() {
+      const status = document.getElementById("status");
+      status.innerText = "📍 定位中...";
+      
+      navigator.geolocation.getCurrentPosition(async (pos) => {
+        userPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        initMap(userPos.lat, userPos.lng);
+        map.setView([userPos.lat, userPos.lng], 16);
 
-        if (userMarker) userMarker.remove();
-        userMarker = L.circleMarker([userPos.lat, userPos.lng], { radius: 8, color: 'white', weight: 2, fillColor: '#4285f4', fillOpacity: 1 }).addTo(map);
+        if (userMarker) userMarker.remove();
+        userMarker = L.circleMarker([userPos.lat, userPos.lng], {
+          radius: 8, color: 'white', weight: 2, fillColor: '#4285f4', fillOpacity: 1
+        }).addTo(map);
 
-        try {
-          status.innerText = "🚲 更新車位中...";
-          const stations = await loadYouBikeData();
-          renderUI(stations);
-          status.innerText = "最後更新: " + new Date().toLocaleTimeString();
-        } catch (err) {
-          status.innerText = "❌ " + err;
-        }
-      }, () => { status.innerText = "❌ 定位失敗"; }, { enableHighAccuracy: true });
-    }
+        try {
+          status.innerText = "📡 連線中 (corsproxy)...";
+          
+          const [stRes, avRes] = await Promise.all([
+            fetch(PROXY + encodeURIComponent(API_STATION)),
+            fetch(PROXY + encodeURIComponent(API_AVAIL))
+          ]);
+          
+          // 🔴 修正點：corsproxy 會直接回傳原始 JSON，不需要再解一次 .contents
+          const stData = await stRes.json();
+          const avData = await avRes.json();
 
-    function renderUI(stations) {
-      const listEl = document.getElementById("list-container");
-      listEl.innerHTML = "";
-      stationGroup.clearLayers();
+          const avMap = {};
+          // 確保資料是陣列 (有時候 TDX 錯誤會回傳物件)
+          if (Array.isArray(avData)) {
+            avData.forEach(a => avMap[a.StationUID] = a);
+          }
 
-      // 計算距離並排序清單 (由近到遠)
-      const nearby = Object.values(stations).map(s => ({
-        ...s,
-        dist: map.distance([userPos.lat, userPos.lng], [parseFloat(s.lat), parseFloat(s.lng)])
-      })).filter(s => s.dist < 2000).sort((a, b) => a.dist - b.dist);
+          renderUI(stData, avMap);
+          status.innerText = "✅ 更新成功";
+        } catch (err) {
+          console.error(err);
+          status.innerText = "❌ 連線失敗，請稍後再試";
+        }
+      }, (err) => {
+        status.innerText = "❌ 定位失敗";
+        alert("需要定位權限");
+      }, { enableHighAccuracy: true, timeout: 10000 });
+    }
 
-      nearby.forEach(s => {
-        const bikes = parseInt(s.sbi);
-        const hex = bikes > 5 ? '#28a745' : (bikes > 0 ? '#e67e22' : '#dc3545');
-        const colorName = bikes > 5 ? 'green' : (bikes > 0 ? 'orange' : 'red');
+    function renderUI(stData, avMap) {
+      const listEl = document.getElementById("list-container");
+      listEl.innerHTML = "";
+      stationGroup.clearLayers();
 
-        // 地圖標記
-        const marker = L.marker([parseFloat(s.lat), parseFloat(s.lng)], {
-          icon: L.icon({
-            iconUrl: `https://cdn.rawgit.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${colorName}.png`,
-            iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34]
-          })
-        }).addTo(stationGroup);
+      if (!Array.isArray(stData)) return; // 錯誤防護
 
-        marker.bindPopup(`
-          <div class="popup-flex">
-            <div class="popup-info">
-              <b>${s.sna.replace('YouBike2.0_', '')}</b><br>
-              <span style="color:${hex}; font-size:16px;">可借: ${s.sbi}</span>
-            </div>
-            <a href="https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}&travelmode=walking" target="_blank" class="nav-btn-right">🧭<br>導航</a>
-          </div>
-        `);
-        markers[s.sno] = marker;
+      const nearby = stData.map(s => {
+        const av = avMap[s.StationUID] || { AvailableRentBikes: 0 };
+        return {
+          uid: s.StationUID,
+          name: s.StationName.Zh_tw.replace('YouBike2.0_', ''),
+          lat: s.StationPosition.PositionLat,
+          lng: s.StationPosition.PositionLon,
+          bikes: av.AvailableRentBikes,
+          dist: map.distance([userPos.lat, userPos.lng], [s.StationPosition.PositionLat, s.StationPosition.PositionLon])
+        };
+      }).filter(s => s.dist < 2000).sort((a, b) => a.dist - b.dist);
 
-        // 下方清單
-        const item = document.createElement("div");
-        item.className = "list-item";
-        item.innerHTML = `
-          <div>
-            <div class="list-name">${s.sna.replace('YouBike2.0_', '')}</div>
-            <div style="font-size:12px; color:#666;">距離 ${Math.round(s.dist)}m | 空位 ${s.bemp}</div>
-          </div>
-          <div class="bike-num" style="color:${hex}">${s.sbi}</div>
-        `;
-        item.onclick = () => {
-          map.flyTo([parseFloat(s.lat), parseFloat(s.lng)], 18);
-          setTimeout(() => markers[s.sno].openPopup(), 400);
-        };
-        listEl.appendChild(item);
-      });
-    }
-  </script>
+      if (nearby.length === 0) {
+        listEl.innerHTML = '<div style="padding:40px; text-align:center; color:#999;">附近無站點</div>';
+        return;
+      }
+
+      nearby.forEach(s => {
+        const hex = s.bikes > 5 ? '#28a745' : (s.bikes > 0 ? '#e67e22' : '#dc3545');
+        const colorName = s.bikes > 5 ? 'green' : (s.bikes > 0 ? 'orange' : 'red');
+        
+        const marker = L.marker([s.lat, s.lng], {
+          icon: L.icon({
+            iconUrl: `https://cdn.rawgit.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${colorName}.png`,
+            iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34]
+          })
+        }).addTo(stationGroup);
+
+        // 使用 Google Maps 通用協議連結
+        const navUrl = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}&travelmode=walking`;
+        
+        marker.bindPopup(`
+          <div class="popup-flex">
+            <div style="padding:15px;flex:1;">
+              <b>${s.name}</b><br>
+              車輛: <span style="color:${hex}; font-weight:bold;">${s.bikes}</span>
+            </div>
+            <a href="${navUrl}" target="_blank" class="nav-btn-right">🧭<br>導航</a>
+          </div>
+        `);
+        markers[s.uid] = marker;
+
+        const item = document.createElement("div");
+        item.className = "list-item";
+        item.innerHTML = `
+          <div>
+            <div class="list-name">${s.name}</div>
+            <div style="font-size:12px;color:#666;">${Math.round(s.dist)} 公尺</div>
+          </div>
+          <div class="bike-num" style="color:${hex}">${s.bikes}</div>
+        `;
+        item.onclick = () => {
+          map.flyTo([s.lat, s.lng], 18);
+          setTimeout(() => markers[s.uid].openPopup(), 400);
+        };
+        listEl.appendChild(item);
+      });
+    }
+  </script>
 </body>
 </html>
